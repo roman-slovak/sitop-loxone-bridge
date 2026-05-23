@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+{#-
+  Loxone Config "Template" import format for Virtual HTTP Inputs.
+  The exact schema Loxone Config expects can vary by version; tweak this
+  template (path, attributes) once a known-good export has been compared.
+  Each top-level <Template> represents a Virtual Input the user wants
+  created in Loxone Config.
+-#}
+<TemplateList Generated="{{ generated_at }}" Source="sitop-loxone-bridge">
+{%- for p in parameters %}
+  <Template Type="VirtualInput"
+            Title="{{ p.loxone_vi | e }}"
+            Unit="{{ p.unit | e }}">
+    {%- if p.min is not none %}
+    <Min>{{ "%.4f" | format(p.min) }}</Min>
+    {%- endif %}
+    {%- if p.max is not none %}
+    <Max>{{ "%.4f" | format(p.max) }}</Max>
+    {%- endif %}
+    <Format>{% if p.dtype == "float" %}%.2f{% elif p.dtype == "int" %}%d{% else %}%s{% endif %}</Format>
+    <Comment>SITOP PSU8600 / {{ p.path | e }} ({{ p.node_id }})</Comment>
+  </Template>
+{%- endfor %}
+</TemplateList>

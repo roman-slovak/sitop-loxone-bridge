@@ -1,0 +1,221 @@
+{% extends "base.html" %}
+{% block title %}Configure · SITOP Bridge{% endblock %}
+{% block content %}
+<section class="hero">
+  <h1>Configure parameters</h1>
+  <p class="muted">
+    Scan <code>{{ settings.opcua_url }}</code>, pick the measurements you want
+    bridged to Loxone, then download the Loxone Config Template XML and import
+    it on the Miniserver side.
+  </p>
+</section>
+
+<div x-data="configurator()" x-init="boot()" class="config">
+  <div class="toolbar">
+    <button class="btn btn--primary"
+            @click="scan()"
+            :disabled="busy">
+      <span x-text="busy ? 'Scanning…' : 'Scan device'"></span>
+    </button>
+    <button class="btn"
+            @click="loadSaved()"
+            :disabled="busy">
+      Reload saved selection
+    </button>
+    <div class="spacer"></div>
+    <button class="btn"
+            @click="saveSelection()"
+            :disabled="busy || selectedCount() === 0">
+      Save selection
+      <span class="badge" x-text="selectedCount()"></span>
+    </button>
+    <a class="btn btn--ghost"
+       :class="selectedCount() === 0 ? 'btn--disabled' : ''"
+       :href="selectedCount() === 0 ? '#' : '/api/export.xml'">
+      Download Loxone XML
+    </a>
+  </div>
+
+  <p class="muted" x-show="message" x-text="message"></p>
+  <p class="text-bad" x-show="error" x-text="error"></p>
+
+  <template x-for="module in modules" :key="module.name">
+    <details class="module" open>
+      <summary>
+        <span class="module-kind" x-text="module.kind"></span>
+        <strong x-text="module.name"></strong>
+        <span class="pill"
+              :class="module.active ? 'pill--ok' : 'pill--muted'"
+              x-text="module.active ? 'active' : 'idle'"></span>
+        <span class="count"
+              x-text="moduleSelectedCount(module) + ' / ' + module.parameters.length + ' selected'"></span>
+        <button class="link" @click.prevent="toggleAll(module, true)">all</button>
+        <button class="link" @click.prevent="toggleAll(module, false)">none</button>
+      </summary>
+      <table class="data">
+        <thead>
+          <tr>
+            <th></th>
+            <th>Parameter</th>
+            <th>Current</th>
+            <th>Unit</th>
+            <th>Loxone VI name</th>
+            <th>NodeId</th>
+          </tr>
+        </thead>
+        <tbody>
+          <template x-for="p in module.parameters" :key="p.node_id">
+            <tr :class="isSelected(p) ? 'row--selected' : ''">
+              <td>
+                <input type="checkbox"
+                       :checked="isSelected(p)"
+                       @change="toggle(module, p, $event.target.checked)" />
+              </td>
+              <td>
+                <strong x-text="p.browse_name"></strong>
+                <span x-show="p.is_status" class="badge">status</span>
+                <div class="small muted mono" x-text="p.path"></div>
+              </td>
+              <td class="mono num" x-text="formatValue(p)"></td>
+              <td x-text="p.unit"></td>
+              <td>
+                <input type="text"
+                       :value="viNameFor(p)"
+                       @input="setViName(p, $event.target.value)"
+                       :disabled="!isSelected(p)"
+                       class="vi-input mono" />
+              </td>
+              <td class="mono small muted" x-text="p.node_id"></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </details>
+  </template>
+
+  <p class="muted" x-show="!modules.length && !busy && !error">
+    Click <strong>Scan device</strong> to discover modules and their measurements.
+  </p>
+</div>
+
+<script>
+  function configurator() {
+    return {
+      modules: [],
+      selection: {},           // node_id -> {loxone_vi, ...}
+      busy: false,
+      message: "",
+      error: "",
+
+      async boot() {
+        await this.loadSaved();
+      },
+
+      async scan() {
+        this.busy = true;
+        this.error = "";
+        this.message = "";
+        try {
+          const r = await fetch("/api/scan", { method: "POST" });
+          if (!r.ok) {
+            const body = await r.json().catch(() => ({}));
+            throw new Error(body.detail || `HTTP ${r.status}`);
+          }
+          const tree = await r.json();
+          this.modules = tree.modules;
+          this.message = `Discovered ${tree.modules.length} modules with ${this.totalParams()} parameters on ${tree.product_name || tree.opcua_url}.`;
+        } catch (e) {
+          this.error = `Scan failed: ${e.message}`;
+        } finally {
+          this.busy = false;
+        }
+      },
+
+      async loadSaved() {
+        const r = await fetch("/api/selection");
+        if (!r.ok) return;
+        const data = await r.json();
+        if (!data.exists) return;
+        this.selection = {};
+        for (const p of data.parameters) {
+          this.selection[p.node_id] = { ...p };
+        }
+        if (this.modules.length === 0) {
+          this.message = `Loaded saved selection with ${data.parameters.length} parameters. Click "Scan device" to see live values.`;
+        }
+      },
+
+      async saveSelection() {
+        this.busy = true;
+        this.error = "";
+        this.message = "";
+        try {
+          const params = Object.values(this.selection);
+          const r = await fetch("/api/selection", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ parameters: params }),
+          });
+          if (!r.ok) {
+            const body = await r.json().catch(() => ({}));
+            throw new Error(body.detail || `HTTP ${r.status}`);
+          }
+          const j = await r.json();
+          this.message = `Selection saved (${j.parameters} parameters). Bridge will pick up the change within a few seconds.`;
+        } catch (e) {
+          this.error = `Save failed: ${e.message}`;
+        } finally {
+          this.busy = false;
+        }
+      },
+
+      totalParams() {
+        return this.modules.reduce((s, m) => s + m.parameters.length, 0);
+      },
+      selectedCount() {
+        return Object.keys(this.selection).length;
+      },
+      moduleSelectedCount(module) {
+        return module.parameters.filter(p => this.isSelected(p)).length;
+      },
+      isSelected(p) {
+        return Object.prototype.hasOwnProperty.call(this.selection, p.node_id);
+      },
+      viNameFor(p) {
+        return (this.selection[p.node_id]?.loxone_vi) || p.suggested_vi;
+      },
+      toggle(module, p, checked) {
+        if (checked) {
+          this.selection[p.node_id] = {
+            node_id: p.node_id,
+            path: p.path,
+            loxone_vi: this.selection[p.node_id]?.loxone_vi || p.suggested_vi,
+            unit: p.unit,
+            dtype: p.dtype,
+            min: p.min,
+            max: p.max,
+          };
+        } else {
+          delete this.selection[p.node_id];
+        }
+      },
+      toggleAll(module, on) {
+        for (const p of module.parameters) {
+          this.toggle(module, p, on);
+        }
+      },
+      setViName(p, name) {
+        if (this.selection[p.node_id]) {
+          this.selection[p.node_id].loxone_vi = name;
+        }
+      },
+      formatValue(p) {
+        if (p.value === null || p.value === undefined) return "—";
+        if (p.dtype === "float") return Number(p.value).toFixed(2);
+        if (p.dtype === "bool") return p.value ? "true" : "false";
+        return String(p.value);
+      },
+    };
+  }
+</script>
+{% endblock %}

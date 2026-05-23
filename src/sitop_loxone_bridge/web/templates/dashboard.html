@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · SITOP Bridge{% endblock %}
+{% block content %}
+<section class="hero">
+  <h1>Bridge status</h1>
+  <p class="muted">
+    Live snapshot of what the bridge is reading from
+    <code>{{ settings.opcua_url }}</code>
+    and writing to <code>{{ settings.loxone_host }}</code>.
+  </p>
+</section>
+
+<div x-data="dashboard()" x-init="boot()" class="dash">
+  <div class="grid">
+    <div class="card">
+      <div class="card-header">Connection</div>
+      <div class="card-body">
+        <div class="status-row">
+          <span class="label">OPC UA</span>
+          <span class="pill" :class="state.opcua_connected ? 'pill--ok' : 'pill--bad'">
+            <span x-text="state.opcua_connected ? 'connected' : 'disconnected'"></span>
+          </span>
+        </div>
+        <div class="status-row">
+          <span class="label">Last tick</span>
+          <span class="mono" x-text="formatTime(state.last_tick) || '—'"></span>
+        </div>
+        <div class="status-row">
+          <span class="label">Selection</span>
+          <span x-text="state.selection_count + ' parameters'"></span>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header">Counters</div>
+      <div class="card-body">
+        <div class="status-row">
+          <span class="label">Ticks</span>
+          <span class="mono" x-text="state.ticks_total"></span>
+        </div>
+        <div class="status-row">
+          <span class="label">Failed</span>
+          <span class="mono"
+                :class="state.ticks_failed > 0 ? 'text-bad' : ''"
+                x-text="state.ticks_failed"></span>
+        </div>
+        <div class="status-row" x-show="state.last_error">
+          <span class="label">Last error</span>
+          <span class="mono text-bad" x-text="state.last_error"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">Parameters</div>
+    <table class="data" x-show="state.parameters && state.parameters.length">
+      <thead>
+        <tr>
+          <th>Loxone VI</th>
+          <th>Value</th>
+          <th>Unit</th>
+          <th>HTTP</th>
+          <th>Streak</th>
+          <th>Path</th>
+        </tr>
+      </thead>
+      <tbody>
+        <template x-for="p in state.parameters" :key="p.loxone_vi">
+          <tr>
+            <td class="mono" x-text="p.loxone_vi"></td>
+            <td class="mono num" x-text="formatValue(p.value)"></td>
+            <td x-text="p.unit"></td>
+            <td>
+              <span class="pill"
+                    :class="(p.last_loxone_status === 200) ? 'pill--ok' : (p.last_loxone_status ? 'pill--bad' : 'pill--muted')"
+                    x-text="p.last_loxone_status || '—'"></span>
+            </td>
+            <td class="mono"
+                :class="p.consecutive_loxone_failures > 0 ? 'text-bad' : ''"
+                x-text="p.consecutive_loxone_failures"></td>
+            <td class="mono small muted" x-text="p.path"></td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+    <p class="muted" x-show="!state.parameters || !state.parameters.length">
+      No parameters selected. Go to <a href="/config">Configure</a> to scan the
+      device and pick what to bridge.
+    </p>
+  </div>
+</div>
+
+<script>
+  function dashboard() {
+    return {
+      state: { parameters: [], ticks_total: 0, ticks_failed: 0, opcua_connected: false, selection_count: 0 },
+      async boot() {
+        await this.refresh();
+        setInterval(() => this.refresh(), 5000);
+      },
+      async refresh() {
+        const r = await fetch("/api/state");
+        if (r.ok) this.state = await r.json();
+      },
+      formatTime(iso) {
+        if (!iso) return null;
+        return new Date(iso).toLocaleTimeString();
+      },
+      formatValue(v) {
+        if (v === null || v === undefined) return "—";
+        return Number(v).toFixed(2);
+      },
+    };
+  }
+</script>
+{% endblock %}

@@ -6,8 +6,6 @@ from dataclasses import dataclass
 import httpx
 import structlog
 
-from sitop_loxone_bridge.opcua_reader import Reading
-
 log = structlog.get_logger(__name__)
 
 
@@ -17,10 +15,15 @@ class LoxoneTarget:
     host: str
     user: str
     password: str
-    vi_power: str
-    vi_voltage: str
-    vi_current: str
     verify_ssl: bool = True
+
+
+@dataclass(frozen=True)
+class WriteOutcome:
+    vi_name: str
+    value: float
+    status: int | None   # HTTP status code, or None for transport-level error
+    ok: bool
 
 
 class LoxoneWriter:
@@ -36,14 +39,12 @@ class LoxoneWriter:
         await self._client.aclose()
 
     def _vi_url(self, vi_name: str, value: float) -> str:
-        # Loxone REST endpoint for Virtual Inputs.
-        # Numeric value is sent as a URL path segment with a dot decimal separator.
         return (
             f"{self._target.scheme}://{self._target.host}"
             f"/dev/sps/io/{vi_name}/{value}"
         )
 
-    async def _send_one(self, vi_name: str, value: float) -> None:
+    async def send_one(self, vi_name: str, value: float) -> WriteOutcome:
         url = self._vi_url(vi_name, value)
         try:
             resp = await self._client.get(url)
@@ -55,23 +56,28 @@ class LoxoneWriter:
                 url=url,
                 error=f"{type(exc).__name__}: {exc}",
             )
-            return
+            return WriteOutcome(vi_name=vi_name, value=value, status=None, ok=False)
 
-        if resp.is_success:
-            return
-
-        log.warning(
-            "loxone.write_failed",
-            vi=vi_name,
+        if not resp.is_success:
+            log.warning(
+                "loxone.write_failed",
+                vi=vi_name,
+                value=value,
+                url=url,
+                status=resp.status_code,
+                body=resp.text[:200],
+            )
+        return WriteOutcome(
+            vi_name=vi_name,
             value=value,
-            url=url,
             status=resp.status_code,
-            body=resp.text[:200],
+            ok=resp.is_success,
         )
 
-    async def send(self, reading: Reading) -> None:
-        await asyncio.gather(
-            self._send_one(self._target.vi_power, reading.power_w),
-            self._send_one(self._target.vi_voltage, reading.voltage_v),
-            self._send_one(self._target.vi_current, reading.current_a),
-        )
+    async def send_many(
+        self, items: list[tuple[str, float]]
+    ) -> list[WriteOutcome]:
+        if not items:
+            return []
+        coros = [self.send_one(name, value) for name, value in items]
+        return await asyncio.gather(*coros)

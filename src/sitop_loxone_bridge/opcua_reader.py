@@ -5,50 +5,46 @@ from dataclasses import dataclass
 import structlog
 from asyncua import Client, Node
 
+from sitop_loxone_bridge.selection import SelectedParameter
+
 log = structlog.get_logger(__name__)
 
 
 @dataclass(frozen=True)
-class Reading:
-    power_w: float
-    voltage_v: float
-    current_a: float
+class ReadResult:
+    loxone_vi: str
+    path: str
+    unit: str
+    value: float | None
 
 
 class OpcuaReader:
-    """Reads SITOP PSU8600 measurements.
-
-    The PSU8600 does not expose total input power directly. We send:
-      * voltage_v = AC input voltage (single node)
-      * power_w   = efficiency_factor * sum(Vout_i * Iout_i) over all outputs
-      * current_a = sum(Iout_i) over all outputs (DC, informational)
-    """
+    """Reads an arbitrary list of selected parameters in one batched call."""
 
     def __init__(
         self,
         url: str,
-        node_input_voltage: str,
-        nodes_output_voltage: list[str],
-        nodes_output_current: list[str],
-        power_efficiency_factor: float = 1.0,
+        parameters: list[SelectedParameter],
+        *,
         username: str = "",
         password: str = "",
         session_timeout_ms: int = 120000,
     ) -> None:
-        if len(nodes_output_voltage) != len(nodes_output_current):
-            raise ValueError(
-                "nodes_output_voltage and nodes_output_current must be the same length"
-            )
         self._url = url
+        self._parameters = list(parameters)
         self._username = username
         self._password = password
         self._session_timeout_ms = session_timeout_ms
-        self._node_input_voltage = node_input_voltage
-        self._nodes_v = list(nodes_output_voltage)
-        self._nodes_i = list(nodes_output_current)
-        self._efficiency = power_efficiency_factor
         self._client: Client | None = None
-        self._batch: list[Node] = []
+        self._nodes: list[Node] = []
+
+    @property
+    def parameters(self) -> list[SelectedParameter]:
+        return list(self._parameters)
+
+    @property
+    def connected(self) -> bool:
+        return self._client is not None
 
     async def connect(self) -> None:
         client = Client(url=self._url, timeout=10)
@@ -59,15 +55,8 @@ class OpcuaReader:
             client.set_password(self._password)
         await client.connect()
         self._client = client
-        # Order in self._batch: [input_voltage, v1, v2, ..., vN, i1, i2, ..., iN]
-        self._batch = [client.get_node(self._node_input_voltage)]
-        self._batch.extend(client.get_node(n) for n in self._nodes_v)
-        self._batch.extend(client.get_node(n) for n in self._nodes_i)
-        log.info(
-            "opcua.connected",
-            url=self._url,
-            outputs=len(self._nodes_v),
-        )
+        self._nodes = [client.get_node(p.node_id) for p in self._parameters]
+        log.info("opcua.connected", url=self._url, parameters=len(self._parameters))
 
     async def disconnect(self) -> None:
         if self._client is None:
@@ -76,25 +65,34 @@ class OpcuaReader:
             await self._client.disconnect()
         finally:
             self._client = None
-            self._batch = []
+            self._nodes = []
             log.info("opcua.disconnected")
 
     async def reconnect(self) -> None:
         await self.disconnect()
         await self.connect()
 
-    async def read(self) -> Reading:
-        if self._client is None or not self._batch:
+    async def read(self) -> list[ReadResult]:
+        if self._client is None or not self._nodes:
             raise RuntimeError("OPC UA client is not connected")
-
-        values = await self._client.read_values(self._batch)
-        n = len(self._nodes_v)
-        input_voltage = float(values[0])
-        voltages = [float(v) for v in values[1 : 1 + n]]
-        currents = [float(v) for v in values[1 + n : 1 + 2 * n]]
-        dc_power = sum(v * i for v, i in zip(voltages, currents))
-        return Reading(
-            power_w=round(self._efficiency * dc_power, 3),
-            voltage_v=round(input_voltage, 2),
-            current_a=round(sum(currents), 3),
-        )
+        raw = await self._client.read_values(self._nodes)
+        results: list[ReadResult] = []
+        for param, value in zip(self._parameters, raw):
+            try:
+                if param.dtype == "bool":
+                    coerced: float | None = float(bool(value))
+                elif param.dtype == "int":
+                    coerced = float(int(value))
+                else:
+                    coerced = float(value)
+            except (TypeError, ValueError):
+                coerced = None
+            results.append(
+                ReadResult(
+                    loxone_vi=param.loxone_vi,
+                    path=param.path,
+                    unit=param.unit,
+                    value=coerced,
+                )
+            )
+        return results
