@@ -47,5 +47,15 @@ def capture_processor(
     # (timestamper, add_log_level, contextvars). We snapshot it before the
     # JSON renderer mutates it. dict() copy avoids the renderer's pop side
     # effects clobbering what we keep in memory.
+    #
+    # Skip routine successful ticks: in steady state they'd dominate the
+    # buffer and push every interesting event (reconnects, errors, config
+    # reloads) off the end. A tick that lost any Loxone write is still
+    # captured because that's exactly the kind of thing we want to see.
+    if (
+        event_dict.get("event") == "tick"
+        and event_dict.get("http_fail", 0) == 0
+    ):
+        return event_dict
     LOG_BUFFER.append(dict(event_dict))
     return event_dict

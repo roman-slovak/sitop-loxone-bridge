@@ -30,3 +30,39 @@ def test_capture_processor_returns_event_unchanged() -> None:
     event = {"event": "x", "level": "warning"}
     result = capture_processor(logger=None, method_name="warning", event_dict=event)
     assert result is event
+
+
+def test_successful_tick_is_not_captured() -> None:
+    from sitop_loxone_bridge.log_capture import LOG_BUFFER
+
+    LOG_BUFFER.clear()
+    capture_processor(
+        logger=None,
+        method_name="info",
+        event_dict={
+            "event": "tick",
+            "level": "info",
+            "parameters": 3,
+            "http_ok": 3,
+            "http_fail": 0,
+        },
+    )
+    assert LOG_BUFFER.snapshot() == []
+
+
+def test_failed_tick_is_captured() -> None:
+    from sitop_loxone_bridge.log_capture import LOG_BUFFER
+
+    LOG_BUFFER.clear()
+    capture_processor(
+        logger=None,
+        method_name="info",
+        event_dict={
+            "event": "tick",
+            "level": "info",
+            "parameters": 3,
+            "http_ok": 1,
+            "http_fail": 2,
+        },
+    )
+    assert len(LOG_BUFFER.snapshot()) == 1
