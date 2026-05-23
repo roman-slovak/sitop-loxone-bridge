@@ -12,6 +12,7 @@ import structlog
 
 from sitop_loxone_bridge.app_config import AppConfig, load_app_config
 from sitop_loxone_bridge.config import Settings
+from sitop_loxone_bridge.log_capture import LOG_BUFFER, capture_processor
 from sitop_loxone_bridge.loxone_writer import LoxoneTarget, LoxoneWriter, WriteOutcome
 from sitop_loxone_bridge.opcua_reader import OpcuaReader, ReadResult
 from sitop_loxone_bridge.runtime_state import (
@@ -38,6 +39,7 @@ def configure_logging(level: str) -> None:
             structlog.contextvars.merge_contextvars,
             structlog.processors.add_log_level,
             structlog.processors.TimeStamper(fmt="iso"),
+            capture_processor,
             structlog.processors.JSONRenderer(),
         ],
         wrapper_class=structlog.make_filtering_bound_logger(
@@ -52,6 +54,19 @@ def _mtime(path: Path) -> float | None:
         return path.stat().st_mtime
     except FileNotFoundError:
         return None
+
+
+# Cap the slice of LOG_BUFFER that ships with each runtime_state.json write.
+# 60 entries is enough to fit the panel without inflating the state file.
+_LOG_SLICE = 60
+
+
+def _persist_state(path: Path, state: RuntimeState) -> RuntimeState:
+    state = state.model_copy(
+        update={"recent_logs": LOG_BUFFER.snapshot(limit=_LOG_SLICE)}
+    )
+    save_state(path, state)
+    return state
 
 
 def _build_writer(cfg: AppConfig) -> LoxoneWriter:
@@ -80,7 +95,7 @@ async def _run(settings: Settings, once: bool) -> int:
 
     state = load_state(settings.state_path)
     state = state.model_copy(update={"opcua_url": cfg.opcua_url})
-    save_state(settings.state_path, state)
+    _persist_state(settings.state_path, state)
 
     writer = _build_writer(cfg)
     reader: OpcuaReader | None = None
@@ -161,7 +176,7 @@ async def _run(settings: Settings, once: bool) -> int:
                         ),
                     }
                 )
-                save_state(settings.state_path, state)
+                _persist_state(settings.state_path, state)
                 if once:
                     return 0
                 try:
@@ -187,7 +202,7 @@ async def _run(settings: Settings, once: bool) -> int:
                     log.error("opcua.connect_failed", error=str(exc))
                     state = state.with_tick_failure(f"connect: {exc}")
                     state = state.model_copy(update={"opcua_connected": False})
-                    save_state(settings.state_path, state)
+                    _persist_state(settings.state_path, state)
                     reader = None
                     backoff = min(60.0, 2 ** min(consecutive_opcua_errors, 6))
                     try:
@@ -204,7 +219,7 @@ async def _run(settings: Settings, once: bool) -> int:
                 log.error("opcua.read_failed", error=str(exc))
                 state = state.with_tick_failure(f"read: {exc}")
                 state = state.model_copy(update={"opcua_connected": False})
-                save_state(settings.state_path, state)
+                _persist_state(settings.state_path, state)
                 if reader is not None:
                     try:
                         await reader.disconnect()
@@ -240,7 +255,7 @@ async def _run(settings: Settings, once: bool) -> int:
                     ),
                 }
             )
-            save_state(settings.state_path, state)
+            _persist_state(settings.state_path, state)
             log.info(
                 "tick",
                 parameters=len(readings),

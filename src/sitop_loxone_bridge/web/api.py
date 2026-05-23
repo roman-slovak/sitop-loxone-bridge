@@ -130,6 +130,18 @@ async def get_state(request: Request) -> dict[str, Any]:
     return state.model_dump(mode="json")
 
 
+@router.get("/logs")
+async def get_logs(request: Request, limit: int = 60) -> dict[str, Any]:
+    """Return the bridge's recent_logs slice. Web's own logs live in the
+    container's stdout; this surfaces just what the bridge captured."""
+    settings = _settings(request)
+    state = load_state(settings.state_path)
+    items = state.recent_logs
+    if limit > 0:
+        items = items[-limit:]
+    return {"entries": items}
+
+
 @router.get("/config")
 async def get_app_config(request: Request) -> dict[str, Any]:
     settings = _settings(request)

@@ -28,6 +28,7 @@ class RuntimeState(BaseModel):
     selection_count: int = 0
     last_error: str | None = None
     parameters: list[ParameterState] = Field(default_factory=list)
+    recent_logs: list[dict] = Field(default_factory=list)
 
     def with_tick_success(self, params: list[ParameterState]) -> "RuntimeState":
         return self.model_copy(
