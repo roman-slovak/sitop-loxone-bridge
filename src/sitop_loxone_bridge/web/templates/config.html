@@ -97,6 +97,12 @@
             :disabled="busy">
       Reload saved selection
     </button>
+    <button class="btn"
+            @click="expandAll(true)"
+            :disabled="!modules.length">Expand all</button>
+    <button class="btn"
+            @click="expandAll(false)"
+            :disabled="!modules.length">Collapse all</button>
     <div class="spacer"></div>
     <button class="btn"
             @click="saveSelection()"
@@ -115,7 +121,9 @@
   <p class="text-bad" x-show="error" x-text="error"></p>
 
   <template x-for="module in modules" :key="module.name">
-    <details class="module" open>
+    <details class="module"
+             :open="module._open"
+             @toggle="module._open = $event.target.open">
       <summary>
         <span class="module-kind" x-text="module.kind"></span>
         <strong x-text="module.name"></strong>
@@ -124,8 +132,8 @@
               x-text="module.active ? 'active' : 'idle'"></span>
         <span class="count"
               x-text="moduleSelectedCount(module) + ' / ' + module.parameters.length + ' selected'"></span>
-        <button class="link" @click.prevent="toggleAll(module, true)">all</button>
-        <button class="link" @click.prevent="toggleAll(module, false)">none</button>
+        <button class="link" @click.prevent.stop="toggleAll(module, true)">all</button>
+        <button class="link" @click.prevent.stop="toggleAll(module, false)">none</button>
       </summary>
       <table class="data">
         <thead>
@@ -248,13 +256,23 @@
             throw new Error(body.detail || `HTTP ${r.status}`);
           }
           const tree = await r.json();
-          this.modules = tree.modules;
+          // Collapse panels by default; open only the Computed group and any
+          // module that already has selected parameters from a saved selection.
+          this.modules = tree.modules.map(m => ({
+            ...m,
+            _open: m.kind === "computed"
+                   || m.parameters.some(p => this.isSelected(p)),
+          }));
           this.message = `Discovered ${tree.modules.length} modules with ${this.totalParams()} parameters on ${tree.product_name || tree.opcua_url}.`;
         } catch (e) {
           this.error = `Scan failed: ${e.message}`;
         } finally {
           this.busy = false;
         }
+      },
+
+      expandAll(open) {
+        for (const m of this.modules) m._open = open;
       },
 
       async loadSaved() {
