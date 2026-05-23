@@ -301,6 +301,17 @@ table.data tr.row--selected { background: rgba(78, 163, 255, 0.05); }
 }
 .toolbar.tight { margin-bottom: 0; margin-top: 8px; }
 
+.section-title {
+  margin: 28px 0 12px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+  padding-top: 18px;
+}
+
 .vi-input {
   background: var(--bg);
   border: 1px solid var(--border);
