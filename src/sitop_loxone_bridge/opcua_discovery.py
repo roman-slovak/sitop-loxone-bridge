@@ -122,26 +122,13 @@ async def _walk(client: Client, url: str, *, read_values: bool) -> ModuleTree:
     if device_module.parameters:
         tree.modules.append(device_module)
 
-    # 2) Outputs: PSU8600/Outputs/Output{1..N}/ActualState/*
-    outputs_node = await _child_by_name(psu, "Outputs")
-    if outputs_node is not None:
-        output_children = await outputs_node.get_children()
-        for child in output_children:
-            browse_name = (await child.read_browse_name()).Name
-            if not browse_name.startswith("Output"):
-                continue
-            mod = await _build_module(
-                client,
-                child,
-                name=browse_name,
-                kind="output",
-                sub_path=["ActualState"],
-                read_values=read_values,
-            )
-            mod.active = _output_active(mod.parameters)
-            tree.modules.append(mod)
+    # 2) Outputs on the main chassis: PSU8600/Outputs/Output{1..N}
+    tree.modules.extend(
+        await _collect_outputs(client, psu, prefix="", read_values=read_values)
+    )
 
-    # 3) SubDevices: PSU8600/SubDevices/{BUF8600_*,CNX8600_*}/ActualState/*
+    # 3) SubDevices: BUF8600_*, CNX8600_*, plus any *additional* PSU8600
+    # chassis whose Outputs we also have to bridge.
     subdev_node = await _child_by_name(psu, "SubDevices")
     if subdev_node is not None:
         for child in await subdev_node.get_children():
@@ -159,6 +146,15 @@ async def _walk(client: Client, url: str, *, read_values: bool) -> ModuleTree:
             )
             mod.active = _module_active(mod.parameters)
             tree.modules.append(mod)
+            # An expansion PSU8600 chassis carries its own /Outputs/ subtree.
+            tree.modules.extend(
+                await _collect_outputs(
+                    client,
+                    child,
+                    prefix=f"{browse_name}/",
+                    read_values=read_values,
+                )
+            )
 
     # 4) Synthetic "Computed" module — derives values from real measurements
     # the user already saw above. Currently emits a single
@@ -169,6 +165,30 @@ async def _walk(client: Client, url: str, *, read_values: bool) -> ModuleTree:
         tree.modules.insert(0, computed)
 
     return tree
+
+
+async def _collect_outputs(
+    client: Client, parent: Node, *, prefix: str, read_values: bool
+) -> list[DiscoveredModule]:
+    outputs_node = await _child_by_name(parent, "Outputs")
+    if outputs_node is None:
+        return []
+    modules: list[DiscoveredModule] = []
+    for child in await outputs_node.get_children():
+        browse_name = (await child.read_browse_name()).Name
+        if not browse_name.startswith("Output"):
+            continue
+        mod = await _build_module(
+            client,
+            child,
+            name=f"{prefix}{browse_name}",
+            kind="output",
+            sub_path=["ActualState"],
+            read_values=read_values,
+        )
+        mod.active = _output_active(mod.parameters)
+        modules.append(mod)
+    return modules
 
 
 def _build_computed_module(modules: list[DiscoveredModule]) -> DiscoveredModule:
@@ -198,11 +218,12 @@ def _build_computed_module(modules: list[DiscoveredModule]) -> DiscoveredModule:
         return computed
 
     total_power = sum(v * i for v, i in zip(voltages, currents)) if voltages else None
+    output_count = len(sources) // 2
     computed.parameters.append(
         DiscoveredParameter(
             node_id="derived:total_output_power",
             browse_name="TotalOutputPower",
-            path="Σ(OutputVoltage_i · OutputCurrent_i)",
+            path=f"Σ(OutputVoltage_i · OutputCurrent_i) across {output_count} outputs",
             dtype="float",
             unit="W",
             min=0.0,
