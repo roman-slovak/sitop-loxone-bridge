@@ -12,7 +12,15 @@ SELECTION_VERSION = 1
 
 
 class SelectedParameter(BaseModel):
-    """One parameter the user has chosen to bridge into Loxone."""
+    """One parameter the user has chosen to bridge into Loxone.
+
+    A parameter is either:
+      * a direct OPC UA read (node_id starts with "ns="), or
+      * a derived value (node_id starts with "derived:" and `sources`
+        + `aggregation` are populated). For "derived:sum_product" the
+        `sources` list is interpreted as alternating voltage/current
+        NodeIds; the value is Σ(V_i · I_i).
+    """
 
     node_id: str
     path: str
@@ -21,6 +29,8 @@ class SelectedParameter(BaseModel):
     dtype: str = "float"
     min: float | None = None
     max: float | None = None
+    sources: list[str] = []
+    aggregation: str = ""  # "" for direct reads, "sum_product" or "sum" for derived
 
     @field_validator("loxone_vi")
     @classmethod
@@ -33,6 +43,10 @@ class SelectedParameter(BaseModel):
         if any(c in v for c in " /?#&"):
             raise ValueError(f"loxone_vi contains forbidden character: {v!r}")
         return v
+
+    @property
+    def is_derived(self) -> bool:
+        return self.node_id.startswith("derived:")
 
 
 class Selection(BaseModel):

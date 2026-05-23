@@ -9,6 +9,11 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from sitop_loxone_bridge import opcua_discovery
+from sitop_loxone_bridge.app_config import (
+    AppConfig,
+    load_app_config,
+    save_app_config,
+)
 from sitop_loxone_bridge.config import Settings
 from sitop_loxone_bridge.loxone_export import render_loxone_template
 from sitop_loxone_bridge.runtime_state import load_state
@@ -30,12 +35,13 @@ def _settings(request: Request) -> Settings:
 @router.post("/scan")
 async def scan(request: Request) -> dict[str, Any]:
     settings = _settings(request)
+    cfg = load_app_config(settings.app_config_path, fallback=settings)
     try:
         tree = await opcua_discovery.discover(
-            url=settings.opcua_url,
-            username=settings.opcua_username,
-            password=settings.opcua_password,
-            session_timeout_ms=settings.opcua_session_timeout_ms,
+            url=cfg.opcua_url,
+            username=cfg.opcua_username,
+            password=cfg.opcua_password,
+            session_timeout_ms=cfg.opcua_session_timeout_ms,
         )
     except Exception as exc:
         log.error("scan.failed", error=str(exc))
@@ -62,6 +68,8 @@ async def scan(request: Request) -> dict[str, Any]:
                         "max": p.max,
                         "value": p.value,
                         "is_status": p.is_status,
+                        "sources": p.sources,
+                        "aggregation": p.aggregation,
                         "suggested_vi": _suggested_vi_name(m.name, p.browse_name),
                     }
                     for p in m.parameters
@@ -73,6 +81,10 @@ async def scan(request: Request) -> dict[str, Any]:
 
 
 def _suggested_vi_name(module_name: str, browse_name: str) -> str:
+    if module_name == "Computed":
+        if browse_name == "TotalOutputPower":
+            return "SITOP_Power"
+        return f"SITOP_{browse_name}"
     short_module = module_name.replace("Output", "Out").replace("8600_", "")
     return f"SITOP_{short_module}_{browse_name}"
 
@@ -116,6 +128,27 @@ async def get_state(request: Request) -> dict[str, Any]:
     settings = _settings(request)
     state = load_state(settings.state_path)
     return state.model_dump(mode="json")
+
+
+@router.get("/config")
+async def get_app_config(request: Request) -> dict[str, Any]:
+    settings = _settings(request)
+    cfg = load_app_config(settings.app_config_path, fallback=settings)
+    return cfg.model_dump(mode="json")
+
+
+@router.put("/config")
+async def put_app_config(
+    request: Request, payload: AppConfig
+) -> dict[str, Any]:
+    settings = _settings(request)
+    save_app_config(settings.app_config_path, payload)
+    log.info(
+        "config.saved",
+        opcua_url=payload.opcua_url,
+        loxone_host=payload.loxone_host,
+    )
+    return {"saved": True}
 
 
 @router.get("/export.xml")

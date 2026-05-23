@@ -2,13 +2,88 @@
 {% block title %}Configure · SITOP Bridge{% endblock %}
 {% block content %}
 <section class="hero">
-  <h1>Configure parameters</h1>
+  <h1>Configure</h1>
   <p class="muted">
-    Scan <code>{{ settings.opcua_url }}</code>, pick the measurements you want
-    bridged to Loxone, then download the Loxone Config Template XML and import
-    it on the Miniserver side.
+    Set connection details below, then scan the device, pick which measurements
+    to bridge to Loxone, and download the Loxone Config Template XML.
   </p>
 </section>
+
+<div x-data="connectionForm()" x-init="boot()" class="card">
+  <div class="card-header">Connection settings</div>
+  <div class="card-body">
+    <div class="form-grid">
+      <fieldset>
+        <legend>OPC UA source</legend>
+        <label>
+          <span>URL</span>
+          <input type="text" x-model="cfg.opcua_url" placeholder="opc.tcp://192.168.1.112:4840" />
+        </label>
+        <label>
+          <span>Username</span>
+          <input type="text" x-model="cfg.opcua_username" placeholder="(anonymous)" />
+        </label>
+        <label>
+          <span>Password</span>
+          <input type="password" x-model="cfg.opcua_password" />
+        </label>
+        <label>
+          <span>Session timeout (ms)</span>
+          <input type="number" x-model.number="cfg.opcua_session_timeout_ms" min="1000" step="1000" />
+        </label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Loxone Miniserver</legend>
+        <label>
+          <span>Scheme</span>
+          <select x-model="cfg.loxone_scheme">
+            <option value="http">http</option>
+            <option value="https">https</option>
+          </select>
+        </label>
+        <label>
+          <span>Host</span>
+          <input type="text" x-model="cfg.loxone_host" placeholder="192.168.1.111" />
+        </label>
+        <label>
+          <span>User</span>
+          <input type="text" x-model="cfg.loxone_user" />
+        </label>
+        <label>
+          <span>Password</span>
+          <input type="password" x-model="cfg.loxone_pass" />
+        </label>
+        <label class="inline">
+          <input type="checkbox" x-model="cfg.loxone_verify_ssl" />
+          <span>Verify TLS certificate</span>
+        </label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Bridge</legend>
+        <label>
+          <span>Poll interval (s)</span>
+          <input type="number" x-model.number="cfg.poll_interval_seconds" min="1" step="1" />
+        </label>
+      </fieldset>
+    </div>
+
+    <div class="toolbar tight">
+      <button class="btn btn--primary"
+              @click="save()"
+              :disabled="busy">
+        <span x-text="busy ? 'Saving…' : 'Save connection settings'"></span>
+      </button>
+      <button class="btn"
+              @click="reload()"
+              :disabled="busy">Discard changes</button>
+      <div class="spacer"></div>
+      <span class="muted small" x-show="message" x-text="message"></span>
+      <span class="text-bad small" x-show="error" x-text="error"></span>
+    </div>
+  </div>
+</div>
 
 <div x-data="configurator()" x-init="boot()" class="config">
   <div class="toolbar">
@@ -99,6 +174,57 @@
 </div>
 
 <script>
+  function connectionForm() {
+    return {
+      cfg: {
+        opcua_url: "",
+        opcua_username: "",
+        opcua_password: "",
+        opcua_session_timeout_ms: 120000,
+        loxone_scheme: "http",
+        loxone_host: "",
+        loxone_user: "",
+        loxone_pass: "",
+        loxone_verify_ssl: true,
+        poll_interval_seconds: 5,
+      },
+      busy: false,
+      message: "",
+      error: "",
+      async boot() { await this.reload(); },
+      async reload() {
+        this.busy = true;
+        try {
+          const r = await fetch("/api/config");
+          if (r.ok) this.cfg = await r.json();
+        } finally {
+          this.busy = false;
+        }
+      },
+      async save() {
+        this.busy = true;
+        this.error = "";
+        this.message = "";
+        try {
+          const r = await fetch("/api/config", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(this.cfg),
+          });
+          if (!r.ok) {
+            const body = await r.json().catch(() => ({}));
+            throw new Error(body.detail || `HTTP ${r.status}`);
+          }
+          this.message = "Saved. Bridge will reconnect with the new settings within a few seconds.";
+        } catch (e) {
+          this.error = `Save failed: ${e.message}`;
+        } finally {
+          this.busy = false;
+        }
+      },
+    };
+  }
+
   function configurator() {
     return {
       modules: [],
@@ -194,6 +320,8 @@
             dtype: p.dtype,
             min: p.min,
             max: p.max,
+            sources: p.sources || [],
+            aggregation: p.aggregation || "",
           };
         } else {
           delete this.selection[p.node_id];

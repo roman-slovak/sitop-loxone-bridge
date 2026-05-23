@@ -47,3 +47,7 @@ class Settings(BaseSettings):
     @property
     def export_xml_path(self) -> Path:
         return self.data_dir / "sitop_loxone_template.xml"
+
+    @property
+    def app_config_path(self) -> Path:
+        return self.data_dir / "app_config.yaml"

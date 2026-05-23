@@ -10,6 +10,7 @@ from pathlib import Path
 
 import structlog
 
+from sitop_loxone_bridge.app_config import AppConfig, load_app_config
 from sitop_loxone_bridge.config import Settings
 from sitop_loxone_bridge.loxone_writer import LoxoneTarget, LoxoneWriter, WriteOutcome
 from sitop_loxone_bridge.opcua_reader import OpcuaReader, ReadResult
@@ -46,11 +47,23 @@ def configure_logging(level: str) -> None:
     )
 
 
-def _selection_mtime(path: Path) -> float | None:
+def _mtime(path: Path) -> float | None:
     try:
         return path.stat().st_mtime
     except FileNotFoundError:
         return None
+
+
+def _build_writer(cfg: AppConfig) -> LoxoneWriter:
+    return LoxoneWriter(
+        target=LoxoneTarget(
+            scheme=cfg.loxone_scheme,
+            host=cfg.loxone_host,
+            user=cfg.loxone_user,
+            password=cfg.loxone_pass,
+            verify_ssl=cfg.loxone_verify_ssl,
+        )
+    )
 
 
 async def _run(settings: Settings, once: bool) -> int:
@@ -62,20 +75,14 @@ async def _run(settings: Settings, once: bool) -> int:
         except NotImplementedError:
             pass
 
+    cfg = load_app_config(settings.app_config_path, fallback=settings)
+    app_cfg_mtime = _mtime(settings.app_config_path)
+
     state = load_state(settings.state_path)
-    state = state.model_copy(update={"opcua_url": settings.opcua_url})
+    state = state.model_copy(update={"opcua_url": cfg.opcua_url})
     save_state(settings.state_path, state)
 
-    writer = LoxoneWriter(
-        target=LoxoneTarget(
-            scheme=settings.loxone_scheme,
-            host=settings.loxone_host,
-            user=settings.loxone_user,
-            password=settings.loxone_pass,
-            verify_ssl=settings.loxone_verify_ssl,
-        )
-    )
-
+    writer = _build_writer(cfg)
     reader: OpcuaReader | None = None
     failure_streak: dict[str, int] = {}
     selection_mtime: float | None = None
@@ -84,8 +91,38 @@ async def _run(settings: Settings, once: bool) -> int:
 
     try:
         while not stop_event.is_set():
-            # 1. Hot-reload selection on mtime change.
-            new_mtime = _selection_mtime(settings.selection_path)
+            # 1. Hot-reload app_config (connection details) on mtime change.
+            new_app_mtime = _mtime(settings.app_config_path)
+            if new_app_mtime != app_cfg_mtime:
+                app_cfg_mtime = new_app_mtime
+                new_cfg = load_app_config(settings.app_config_path, fallback=settings)
+                if (
+                    new_cfg.opcua_url != cfg.opcua_url
+                    or new_cfg.opcua_username != cfg.opcua_username
+                    or new_cfg.opcua_password != cfg.opcua_password
+                ):
+                    if reader is not None:
+                        await reader.disconnect()
+                        reader = None
+                if (
+                    new_cfg.loxone_scheme != cfg.loxone_scheme
+                    or new_cfg.loxone_host != cfg.loxone_host
+                    or new_cfg.loxone_user != cfg.loxone_user
+                    or new_cfg.loxone_pass != cfg.loxone_pass
+                    or new_cfg.loxone_verify_ssl != cfg.loxone_verify_ssl
+                ):
+                    await writer.aclose()
+                    writer = _build_writer(new_cfg)
+                cfg = new_cfg
+                state = state.model_copy(update={"opcua_url": cfg.opcua_url})
+                log.info(
+                    "app_config.reloaded",
+                    opcua_url=cfg.opcua_url,
+                    loxone_host=cfg.loxone_host,
+                )
+
+            # 2. Hot-reload selection.
+            new_mtime = _mtime(settings.selection_path)
             if new_mtime != selection_mtime:
                 selection_mtime = new_mtime
                 old_selection = selection
@@ -110,7 +147,7 @@ async def _run(settings: Settings, once: bool) -> int:
                         changed=old_selection is not None,
                     )
 
-            # 2. If no selection, idle.
+            # 3. If no selection, idle.
             if selection is None or not selection.parameters:
                 state = state.model_copy(
                     update={
@@ -128,19 +165,19 @@ async def _run(settings: Settings, once: bool) -> int:
                 if once:
                     return 0
                 try:
-                    await asyncio.wait_for(stop_event.wait(), timeout=settings.poll_interval_seconds)
+                    await asyncio.wait_for(stop_event.wait(), timeout=cfg.poll_interval_seconds)
                 except asyncio.TimeoutError:
                     pass
                 continue
 
-            # 3. Ensure OPC UA connected.
+            # 4. Ensure OPC UA connected.
             if reader is None:
                 reader = OpcuaReader(
-                    url=settings.opcua_url,
+                    url=cfg.opcua_url,
                     parameters=selection.parameters,
-                    username=settings.opcua_username,
-                    password=settings.opcua_password,
-                    session_timeout_ms=settings.opcua_session_timeout_ms,
+                    username=cfg.opcua_username,
+                    password=cfg.opcua_password,
+                    session_timeout_ms=cfg.opcua_session_timeout_ms,
                 )
                 try:
                     await reader.connect()
@@ -159,7 +196,7 @@ async def _run(settings: Settings, once: bool) -> int:
                         pass
                     continue
 
-            # 4. Read + write.
+            # 5. Read + write.
             try:
                 readings = await reader.read()
             except Exception as exc:
@@ -217,7 +254,7 @@ async def _run(settings: Settings, once: bool) -> int:
             try:
                 await asyncio.wait_for(
                     stop_event.wait(),
-                    timeout=settings.poll_interval_seconds,
+                    timeout=cfg.poll_interval_seconds,
                 )
             except asyncio.TimeoutError:
                 pass
@@ -278,7 +315,6 @@ def main() -> None:
         "bridge.starting",
         opcua_url=settings.opcua_url,
         loxone_host=settings.loxone_host,
-        poll_interval=settings.poll_interval_seconds,
         data_dir=str(settings.data_dir),
         once=args.once,
     )

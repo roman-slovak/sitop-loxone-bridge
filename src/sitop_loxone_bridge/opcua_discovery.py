@@ -50,6 +50,8 @@ class DiscoveredParameter:
     max: float | None = None
     value: float | bool | int | None = None
     is_status: bool = False  # e.g. OperationState, ModuleState - useful for UI badges
+    sources: list[str] = field(default_factory=list)
+    aggregation: str = ""  # "" | "sum_product" | "sum"
 
 
 @dataclass
@@ -158,7 +160,59 @@ async def _walk(client: Client, url: str, *, read_values: bool) -> ModuleTree:
             mod.active = _module_active(mod.parameters)
             tree.modules.append(mod)
 
+    # 4) Synthetic "Computed" module — derives values from real measurements
+    # the user already saw above. Currently emits a single
+    # `TotalOutputPower = Σ(OutputVoltage_i × OutputCurrent_i)` because the
+    # PSU8600 does not expose total input power directly.
+    computed = _build_computed_module(tree.modules)
+    if computed.parameters:
+        tree.modules.insert(0, computed)
+
     return tree
+
+
+def _build_computed_module(modules: list[DiscoveredModule]) -> DiscoveredModule:
+    computed = DiscoveredModule(name="Computed", kind="computed", path="(derived)")
+    sources: list[str] = []
+    voltages: list[float] = []
+    currents: list[float] = []
+    for m in modules:
+        if m.kind != "output":
+            continue
+        v_node = i_node = None
+        v_val = i_val = None
+        for p in m.parameters:
+            if p.browse_name == "OutputVoltage":
+                v_node = p.node_id
+                v_val = p.value if isinstance(p.value, (int, float)) else None
+            elif p.browse_name == "OutputCurrent":
+                i_node = p.node_id
+                i_val = p.value if isinstance(p.value, (int, float)) else None
+        if v_node and i_node:
+            sources.extend([v_node, i_node])
+            if v_val is not None and i_val is not None:
+                voltages.append(float(v_val))
+                currents.append(float(i_val))
+
+    if not sources:
+        return computed
+
+    total_power = sum(v * i for v, i in zip(voltages, currents)) if voltages else None
+    computed.parameters.append(
+        DiscoveredParameter(
+            node_id="derived:total_output_power",
+            browse_name="TotalOutputPower",
+            path="Σ(OutputVoltage_i · OutputCurrent_i)",
+            dtype="float",
+            unit="W",
+            min=0.0,
+            max=None,
+            value=round(total_power, 3) if total_power is not None else None,
+            sources=sources,
+            aggregation="sum_product",
+        )
+    )
+    return computed
 
 
 # --- helpers ---------------------------------------------------------------

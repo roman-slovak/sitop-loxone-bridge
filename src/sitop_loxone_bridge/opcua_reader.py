@@ -19,7 +19,7 @@ class ReadResult:
 
 
 class OpcuaReader:
-    """Reads an arbitrary list of selected parameters in one batched call."""
+    """Reads a mixed list of direct + derived parameters in one batched call."""
 
     def __init__(
         self,
@@ -36,6 +36,20 @@ class OpcuaReader:
         self._password = password
         self._session_timeout_ms = session_timeout_ms
         self._client: Client | None = None
+
+        # Collect every distinct OPC UA NodeId we need to read each tick:
+        # direct params themselves plus the source NodeIds of any derived ones.
+        self._batch_ids: list[str] = []
+        seen: set[str] = set()
+        for p in self._parameters:
+            if not p.is_derived:
+                if p.node_id not in seen:
+                    self._batch_ids.append(p.node_id)
+                    seen.add(p.node_id)
+            for src in p.sources:
+                if src not in seen:
+                    self._batch_ids.append(src)
+                    seen.add(src)
         self._nodes: list[Node] = []
 
     @property
@@ -55,8 +69,13 @@ class OpcuaReader:
             client.set_password(self._password)
         await client.connect()
         self._client = client
-        self._nodes = [client.get_node(p.node_id) for p in self._parameters]
-        log.info("opcua.connected", url=self._url, parameters=len(self._parameters))
+        self._nodes = [client.get_node(nid) for nid in self._batch_ids]
+        log.info(
+            "opcua.connected",
+            url=self._url,
+            parameters=len(self._parameters),
+            unique_nodes=len(self._batch_ids),
+        )
 
     async def disconnect(self) -> None:
         if self._client is None:
@@ -73,26 +92,66 @@ class OpcuaReader:
         await self.connect()
 
     async def read(self) -> list[ReadResult]:
-        if self._client is None or not self._nodes:
+        if self._client is None:
             raise RuntimeError("OPC UA client is not connected")
-        raw = await self._client.read_values(self._nodes)
+        # Batch-read every unique source NodeId once.
+        if self._nodes:
+            raw = await self._client.read_values(self._nodes)
+        else:
+            raw = []
+        by_node = dict(zip(self._batch_ids, raw))
+
         results: list[ReadResult] = []
-        for param, value in zip(self._parameters, raw):
-            try:
-                if param.dtype == "bool":
-                    coerced: float | None = float(bool(value))
-                elif param.dtype == "int":
-                    coerced = float(int(value))
-                else:
-                    coerced = float(value)
-            except (TypeError, ValueError):
-                coerced = None
+        for param in self._parameters:
+            if param.is_derived:
+                value = _compute_derived(param, by_node)
+            else:
+                value = _coerce(by_node.get(param.node_id), param.dtype)
             results.append(
                 ReadResult(
                     loxone_vi=param.loxone_vi,
                     path=param.path,
                     unit=param.unit,
-                    value=coerced,
+                    value=value,
                 )
             )
         return results
+
+
+def _coerce(value: object, dtype: str) -> float | None:
+    if value is None:
+        return None
+    try:
+        if dtype == "bool":
+            return float(bool(value))
+        if dtype == "int":
+            return float(int(value))  # type: ignore[arg-type]
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+def _compute_derived(
+    param: SelectedParameter, by_node: dict[str, object]
+) -> float | None:
+    agg = param.aggregation
+    if agg == "sum_product":
+        if not param.sources or len(param.sources) % 2 != 0:
+            return None
+        total = 0.0
+        for v_id, i_id in zip(param.sources[0::2], param.sources[1::2]):
+            v = _coerce(by_node.get(v_id), "float")
+            i = _coerce(by_node.get(i_id), "float")
+            if v is None or i is None:
+                return None
+            total += v * i
+        return round(total, 3)
+    if agg == "sum":
+        total = 0.0
+        for sid in param.sources:
+            v = _coerce(by_node.get(sid), "float")
+            if v is None:
+                return None
+            total += v
+        return round(total, 3)
+    return None
