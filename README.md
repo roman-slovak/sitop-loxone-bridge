@@ -24,6 +24,19 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
+### Prebuilt image
+
+GitHub Actions builds multi-arch (`linux/amd64`, `linux/arm64`) images on
+every push to `main` and on tags. To use the prebuilt image instead of
+building locally, swap the `build: .` lines in `docker-compose.yml` for:
+
+```yaml
+image: ghcr.io/roman-slovak/sitop-loxone-bridge:latest
+```
+
+Tags published: `latest` (main), `vX.Y.Z` (release tags), `sha-<short>`
+(every commit).
+
 Open `http://localhost:8767/config`:
 
 1. **Connection settings** — set OPC UA URL and Loxone Miniserver host /
