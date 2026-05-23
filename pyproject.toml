@@ -1,0 +1,33 @@
+[project]
+name = "sitop-loxone-bridge"
+version = "0.1.0"
+description = "Reads SITOP PSU8600 power consumption via OPC UA and forwards it to Loxone Miniserver Energy Manager."
+readme = "README.md"
+authors = [
+    { name = "Roman Slovák", email = "roman.slovak@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "asyncua>=1.1.8",
+    "httpx>=0.28.1",
+    "pydantic-settings>=2.14.1",
+    "structlog>=25.5.0",
+]
+
+[project.scripts]
+sitop-loxone-bridge = "sitop_loxone_bridge:main"
+
+[build-system]
+requires = ["uv_build>=0.11.14,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+    "pytest-asyncio>=1.3.0",
+    "respx>=0.23.1",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
