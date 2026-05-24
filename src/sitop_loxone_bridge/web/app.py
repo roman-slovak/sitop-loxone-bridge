@@ -26,5 +26,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from sitop_loxone_bridge.web import api, pages
 
     app.include_router(pages.router)
+    app.include_router(api.health_router)        # /healthz at root
     app.include_router(api.router, prefix="/api")
     return app

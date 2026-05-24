@@ -6,6 +6,7 @@ from typing import Any
 
 import structlog
 from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from sitop_loxone_bridge import opcua_discovery
@@ -15,6 +16,7 @@ from sitop_loxone_bridge.app_config import (
     save_app_config,
 )
 from sitop_loxone_bridge.config import Settings
+from sitop_loxone_bridge.healthcheck import compute_health
 from sitop_loxone_bridge.loxone_export import render_loxone_template
 from sitop_loxone_bridge.runtime_state import load_state
 from sitop_loxone_bridge.selection import (
@@ -26,6 +28,31 @@ from sitop_loxone_bridge.selection import (
 
 log = structlog.get_logger(__name__)
 router = APIRouter()
+
+# Registered at the app root in create_app() so the path is /healthz (no /api prefix).
+health_router = APIRouter()
+
+
+@health_router.get("/healthz")
+async def healthz(request: Request) -> JSONResponse:
+    settings = _settings(request)
+    health = compute_health(
+        settings.state_path,
+        fresh_window_s=settings.health_fresh_window_s,
+    )
+    body = {
+        "status": "ok" if health.ok else "degraded",
+        "web_ok": True,
+        "bridge_ok": health.ok,
+        "last_tick": health.last_tick.isoformat() if health.last_tick else None,
+        "last_tick_age_s": (
+            round(health.last_tick_age_s, 2)
+            if health.last_tick_age_s is not None
+            else None
+        ),
+        "fresh_window_s": health.fresh_window_s,
+    }
+    return JSONResponse(body, status_code=200 if health.ok else 503)
 
 
 def _settings(request: Request) -> Settings:
