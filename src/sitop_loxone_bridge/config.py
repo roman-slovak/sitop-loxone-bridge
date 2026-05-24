@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     # --- Bridge runtime ---
     poll_interval_seconds: float = Field(default=5.0, gt=0)
     log_level: str = "INFO"
+    health_fresh_window_s: float = Field(default=60.0, gt=0)
 
     # --- Web ---
     web_host: str = "0.0.0.0"

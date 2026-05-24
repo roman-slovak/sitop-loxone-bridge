@@ -35,3 +35,29 @@ def test_data_dir_override(
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     settings = Settings()
     assert settings.selection_path.parent == tmp_path
+
+
+def test_health_fresh_window_default(
+    monkeypatch: pytest.MonkeyPatch, chdir_tmp
+) -> None:
+    _base_env(monkeypatch)
+    settings = Settings()
+    assert settings.health_fresh_window_s == 60.0
+
+
+def test_health_fresh_window_override(
+    monkeypatch: pytest.MonkeyPatch, chdir_tmp
+) -> None:
+    _base_env(monkeypatch)
+    monkeypatch.setenv("HEALTH_FRESH_WINDOW_S", "30")
+    settings = Settings()
+    assert settings.health_fresh_window_s == 30.0
+
+
+def test_health_fresh_window_must_be_positive(
+    monkeypatch: pytest.MonkeyPatch, chdir_tmp
+) -> None:
+    _base_env(monkeypatch)
+    monkeypatch.setenv("HEALTH_FRESH_WINDOW_S", "0")
+    with pytest.raises(ValueError):
+        Settings()
