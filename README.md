@@ -184,7 +184,7 @@ Both containers expose Docker HEALTHCHECKs:
 - `sitop-bridge` runs `python -m sitop_loxone_bridge.healthcheck`, which
   reads `runtime_state.json` and exits 0 if `last_tick` is within
   `HEALTH_FRESH_WINDOW_S` seconds (default 60 s), else 1.
-- `sitop-web` curls `GET /healthz` locally and propagates the status.
+- `sitop-web` probes `GET /healthz` locally and propagates the status.
 
 External monitors can hit `http://<host>:8767/healthz` to get a JSON
 body describing the bridge's freshness:
@@ -200,9 +200,12 @@ body describing the bridge's freshness:
 }
 ```
 
-`HTTP 200` when `bridge_ok` is true, `503` otherwise. Web stays healthy
-independently of the bridge — if you see `200` from `/` but `503` from
-`/healthz`, the web is fine and the bridge is stuck.
+`HTTP 200` when `bridge_ok` is true, `503` otherwise. The web UI itself
+keeps serving (`GET /` and the dashboard still return 200) even while
+`/healthz` reports 503, so you can load the dashboard to investigate.
+Note that because `sitop-web`'s Docker HEALTHCHECK probes `/healthz`,
+both containers will show as `unhealthy` in `docker ps` when the bridge
+is stuck — that's expected.
 
 ## Local development
 
