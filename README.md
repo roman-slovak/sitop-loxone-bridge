@@ -177,6 +177,33 @@ failures, and any tick that lost a Loxone write.
 `docker compose logs -f sitop-bridge` still shows the full JSON stream on
 stdout.
 
+## Healthcheck
+
+Both containers expose Docker HEALTHCHECKs:
+
+- `sitop-bridge` runs `python -m sitop_loxone_bridge.healthcheck`, which
+  reads `runtime_state.json` and exits 0 if `last_tick` is within
+  `HEALTH_FRESH_WINDOW_S` seconds (default 60 s), else 1.
+- `sitop-web` curls `GET /healthz` locally and propagates the status.
+
+External monitors can hit `http://<host>:8767/healthz` to get a JSON
+body describing the bridge's freshness:
+
+```json
+{
+  "status": "ok",
+  "web_ok": true,
+  "bridge_ok": true,
+  "last_tick": "2026-05-24T10:30:00+00:00",
+  "last_tick_age_s": 4.2,
+  "fresh_window_s": 60
+}
+```
+
+`HTTP 200` when `bridge_ok` is true, `503` otherwise. Web stays healthy
+independently of the bridge — if you see `200` from `/` but `503` from
+`/healthz`, the web is fine and the bridge is stuck.
+
 ## Local development
 
 ```sh
