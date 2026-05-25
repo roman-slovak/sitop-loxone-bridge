@@ -6,6 +6,8 @@ containers — a polling **bridge** and a small **web UI** for discovering
 modules, editing connection settings, picking which measurements to forward,
 and generating the Loxone Config import file.
 
+![Dashboard](docs/dashboard.png)
+
 ```
 SITOP PSU8600         sitop-web (UI :8767)        Loxone Miniserver
 opc.tcp://...112 ───┐                            ┌── /dev/sps/io/...
